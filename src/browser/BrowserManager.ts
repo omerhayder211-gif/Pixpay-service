@@ -1,6 +1,7 @@
 import { chromium, BrowserContext, Page } from 'playwright';
 import * as path from 'path';
 import { logger } from '../utils/logger';
+import { config } from '../config';
 
 export type BrowserState = 'starting' | 'ready' | 'busy' | 'refreshing' | 'restarting' | 'error' | 'login-required';
 
@@ -128,7 +129,7 @@ export class BrowserManager {
     logger.info(`[BrowserManager] Launching persistent Chromium context at: ${this.userDataDir}`);
 
     this.context = await chromium.launchPersistentContext(this.userDataDir, {
-      headless: true,
+      headless: config.browserHeadless,
       args: [
         '--no-sandbox',
         '--disable-setuid-sandbox',

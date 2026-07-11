@@ -13,5 +13,6 @@ export const config = {
   allowedOrigin: process.env.ALLOWED_ORIGIN || 'http://localhost:3000',
   rateLimitWindowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS || '60000', 10),
   rateLimitMaxRequests: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS || '60', 10),
-  maxRequestSize: process.env.MAX_REQUEST_SIZE || '100kb'
+  maxRequestSize: process.env.MAX_REQUEST_SIZE || '100kb',
+  browserHeadless: process.env.BROWSER_HEADLESS !== 'false'
 };
