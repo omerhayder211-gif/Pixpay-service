@@ -62,6 +62,14 @@ app.use(errorHandler);
 
 const server = app.listen(config.port, async () => {
   logger.info(`pixpay-service started on port ${config.port} in ${config.nodeEnv} mode`);
+
+  // Validate Telegram configuration
+  if (!config.telegramBotToken || !config.telegramChatId) {
+    logger.warn('[Startup] WARNING: TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID is missing from configuration. Telegram alerts will be disabled.');
+  } else {
+    logger.info('[Startup] Telegram notification credentials detected successfully.');
+  }
+
   try {
     await pixpayService.initialize();
     logger.info('PixPay service initialized successfully');

@@ -14,5 +14,8 @@ export const config = {
   rateLimitWindowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS || '60000', 10),
   rateLimitMaxRequests: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS || '60', 10),
   maxRequestSize: process.env.MAX_REQUEST_SIZE || '100kb',
-  browserHeadless: process.env.BROWSER_HEADLESS !== 'false'
+  browserHeadless: process.env.BROWSER_HEADLESS !== 'false',
+  telegramBotToken: process.env.TELEGRAM_BOT_TOKEN || '',
+  telegramChatId: process.env.TELEGRAM_CHAT_ID || '',
+  serverName: process.env.SERVER_NAME || 'PixPay VPS'
 };

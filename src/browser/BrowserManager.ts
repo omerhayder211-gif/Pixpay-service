@@ -2,6 +2,7 @@ import { chromium, BrowserContext, Page } from 'playwright';
 import * as path from 'path';
 import { logger } from '../utils/logger';
 import { config } from '../config';
+import { sendTelegramNotification } from '../utils/telegram';
 
 export type BrowserState = 'starting' | 'ready' | 'busy' | 'refreshing' | 'restarting' | 'error' | 'login-required';
 
@@ -20,6 +21,8 @@ export class BrowserManager {
   private readyResolvers: Array<() => void> = [];
   private startupTime: number | null = null;
   private lastRefreshTime: number | null = null;
+  private telegramAlertSent = false;
+  private authCheckInterval: ReturnType<typeof setInterval> | null = null;
 
   // Queuing System
   private queue: Array<{
@@ -55,6 +58,8 @@ export class BrowserManager {
 
     if (state === 'ready') {
       this.startRefreshTimer();
+      this.stopAuthCheckLoop();
+      this.telegramAlertSent = false;
       
       // Resolve any waiters blocked on waitForReady()
       const resolvers = this.readyResolvers.splice(0);
@@ -66,6 +71,10 @@ export class BrowserManager {
       }
     } else {
       this.stopRefreshTimer();
+    }
+
+    if (state === 'login-required') {
+      this.handleLoginRequiredState();
     }
   }
 
@@ -344,6 +353,7 @@ export class BrowserManager {
   async shutdown(): Promise<void> {
     logger.info('[BrowserManager] Shutting down...');
     this.stopRefreshTimer();
+    this.stopAuthCheckLoop();
     this.refreshPending = false;
     
     // Reject all queued requests
@@ -375,5 +385,96 @@ export class BrowserManager {
 
   getQueueLength(): number {
     return this.queue.length;
+  }
+
+  // --- Authentication Helpers ---
+  async checkAuthentication(): Promise<boolean> {
+    if (!this.page) return false;
+    try {
+      const currentUrl = this.page.url();
+      
+      // 1. If redirected to login, we are unauthenticated
+      if (currentUrl.includes('/#/login')) {
+        logger.info('[BrowserManager] Auth Check: Browser is redirected to login page.');
+        return false;
+      }
+      
+      // 2. If on the Pay In page, we are authenticated
+      if (currentUrl.includes('/payin')) {
+        return true;
+      }
+
+      // 3. Fallback: check if login forms are visible on the page
+      const isLoginFormVisible = await this.page.locator('input[type="password"], button:has-text("Login"), button:has-text("Log In")').first().isVisible({ timeout: 1000 }).catch(() => false);
+      if (isLoginFormVisible) {
+        logger.info('[BrowserManager] Auth Check: Login form components are visible on screen.');
+        return false;
+      }
+
+      return true;
+    } catch (err) {
+      logger.error('[BrowserManager] Auth check failed with error:', err);
+      return false;
+    }
+  }
+
+  private startAuthCheckLoop(): void {
+    this.stopAuthCheckLoop();
+    this.authCheckInterval = setInterval(async () => {
+      await this.checkRecovery();
+    }, 5000);
+    logger.info('[BrowserManager] Background authentication restore check loop started (every 5s).');
+  }
+
+  private stopAuthCheckLoop(): void {
+    if (this.authCheckInterval) {
+      clearInterval(this.authCheckInterval);
+      this.authCheckInterval = null;
+    }
+  }
+
+  private async checkRecovery(): Promise<void> {
+    if (this.state !== 'login-required') {
+      this.stopAuthCheckLoop();
+      return;
+    }
+
+    try {
+      const isAuthenticated = await this.checkAuthentication();
+      if (isAuthenticated) {
+        logger.info('[BrowserManager] Authentication recovery detected!');
+        this.stopAuthCheckLoop();
+        
+        await this.ensurePayInPage();
+        this.setState('ready');
+      }
+    } catch (err) {
+      // Ignored during background polling
+    }
+  }
+
+  private async handleLoginRequiredState(): Promise<void> {
+    this.startAuthCheckLoop();
+
+    if (this.telegramAlertSent) {
+      logger.info('[BrowserManager] Telegram login alert already sent for this auth loss. Suppressing duplicate notification.');
+      return;
+    }
+
+    this.telegramAlertSent = true;
+    const currentUrl = this.page ? this.page.url() : 'Unknown';
+    const timestamp = new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }) + ' EST';
+
+    const alertMessage = 
+      `🚨 <b>PixPay Authentication Alert</b>\n\n` +
+      `<b>Server:</b> ${config.serverName}\n` +
+      `<b>Status:</b> Login Required\n` +
+      `<b>Current URL:</b> <code>${currentUrl}</code>\n` +
+      `<b>Timestamp:</b> ${timestamp}\n\n` +
+      `<i>Action Required: Please open the warm Chromium browser via Remote Desktop on your VPS and complete manual login.</i>`;
+
+    sendTelegramNotification(alertMessage).catch((err) => {
+      logger.error('[BrowserManager] Failed to trigger sendTelegramNotification background promise:', err);
+    });
   }
 }
