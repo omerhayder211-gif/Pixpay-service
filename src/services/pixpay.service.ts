@@ -86,11 +86,11 @@ export class PixPayService {
   // cashier form uses different label text in its radio buttons.
   private static readonly PAYMENT_METHOD_MAP: Record<string, string> = {
     'CashApp':       'CashApp',
-    'Apple Pay':     'Apple Pay',
-    'Google Pay':    'Google Pay',
+    'Apple Pay':     'ApplePay',
+    'Google Pay':    'GooglePay',
     'Chime':         'Chime',
-    'BTC':           'BTC',
-    'Lightning BTC': 'BTC',
+    'BTC':           'BtcPay',
+    'Lightning BTC': 'BtcPay',
     'Debit Card':    'Debit Card',
   };
 
