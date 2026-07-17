@@ -81,12 +81,41 @@ export class PixPayService {
     }
   }
 
+  // Maps Olympus payment method names to PixPay Pay In UI radio label text.
+  // Olympus sends its own display names (e.g. "Lightning BTC"), but the PixPay
+  // cashier form uses different label text in its radio buttons.
+  private static readonly PAYMENT_METHOD_MAP: Record<string, string> = {
+    'CashApp':       'CashApp',
+    'Apple Pay':     'Apple Pay',
+    'Google Pay':    'Google Pay',
+    'Chime':         'Chime',
+    'BTC':           'BTC',
+    'Lightning BTC': 'BTC',
+    'Debit Card':    'Debit Card',
+  };
+
+  private resolvePixPayMethod(olympusMethod: string): string {
+    const mapped = PixPayService.PAYMENT_METHOD_MAP[olympusMethod];
+    if (!mapped) {
+      throw new Error(
+        `Unsupported payment method received from Olympus: "${olympusMethod}". ` +
+        `Supported methods: ${Object.keys(PixPayService.PAYMENT_METHOD_MAP).join(', ')}`
+      );
+    }
+    return mapped;
+  }
+
   private async executePaymentCreationFlow(page: Page, context: any, inputs: PaymentInputs): Promise<PaymentResult> {
+    // Resolve the PixPay-side method name before any browser interaction
+    const pixpayMethod = this.resolvePixPayMethod(inputs.paymentMethod);
+
     const INPUTS = {
       userId: inputs.userId,
       paymentMethod: inputs.paymentMethod,
       amount: inputs.amount
     };
+
+    logger.info(`[PixPayService] Payment method mapping: Olympus="${INPUTS.paymentMethod}" -> PixPay="${pixpayMethod}"`);
 
     // --- Step 1: Open Add Payment form ---
     logger.info('[PixPayService] Locating the "Add" button...');
@@ -104,15 +133,45 @@ export class PixPayService {
 
     // --- Step 2: Fill form fields ---
     logger.info('[PixPayService] Filling form fields inside dialog...');
-    try {
-      logger.info(`[PixPayService] Selecting Pay Way (Radio) -> ${INPUTS.paymentMethod}...`);
-      const payWayRadio = formDialog.locator('label.el-radio').filter({ hasText: INPUTS.paymentMethod }).first();
-      await payWayRadio.waitFor({ state: 'visible', timeout: 5000 });
-      await payWayRadio.click({ force: true });
-      await page.waitForTimeout(500);
-    } catch (e) {
-      logger.warn('[PixPayService] Failed to select Pay Way:', e);
+
+    // --- Step 2a: Select Payment Method (Pay Way) ---
+    logger.info(`[PixPayService] Selecting Pay Way radio -> "${pixpayMethod}"...`);
+
+    // Log all available radio options for diagnostics
+    const allRadios = formDialog.locator('label.el-radio');
+    const radioCount = await allRadios.count();
+    const availableOptions: string[] = [];
+    for (let i = 0; i < radioCount; i++) {
+      const text = (await allRadios.nth(i).innerText()).trim();
+      availableOptions.push(text);
     }
+    logger.info(`[PixPayService] Available Pay Way options (${radioCount}): [${availableOptions.join(' | ')}]`);
+
+    // Find and click the target payment method radio
+    const payWayRadio = formDialog.locator('label.el-radio').filter({ hasText: pixpayMethod }).first();
+    await payWayRadio.waitFor({ state: 'visible', timeout: 5000 });
+    await payWayRadio.click({ force: true });
+    await page.waitForTimeout(500);
+
+    // Verify the correct radio is now selected (has 'is-checked' class in Element UI)
+    const selectedRadio = formDialog.locator('label.el-radio.is-checked');
+    const selectedCount = await selectedRadio.count();
+    if (selectedCount === 0) {
+      throw new Error(
+        `Payment method selection verification failed: No radio button has "is-checked" class after clicking "${pixpayMethod}". ` +
+        `Available options were: [${availableOptions.join(' | ')}]`
+      );
+    }
+    const selectedText = (await selectedRadio.first().innerText()).trim();
+    logger.info(`[PixPayService] Verification: Currently selected Pay Way radio text = "${selectedText}"`);
+
+    if (!selectedText.includes(pixpayMethod)) {
+      throw new Error(
+        `Payment method selection mismatch! Requested="${pixpayMethod}" but selected="${selectedText}". ` +
+        `Aborting payment creation to prevent wrong method. Available options were: [${availableOptions.join(' | ')}]`
+      );
+    }
+    logger.info(`[PixPayService] Pay Way selection CONFIRMED: "${pixpayMethod}" is selected.`);
 
     try {
       logger.info(`[PixPayService] Filling User ID with: ${INPUTS.userId}...`);
