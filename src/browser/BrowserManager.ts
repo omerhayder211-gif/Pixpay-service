@@ -23,6 +23,7 @@ export class BrowserManager {
   private lastRefreshTime: number | null = null;
   private telegramAlertSent = false;
   private authCheckInterval: ReturnType<typeof setInterval> | null = null;
+  private authMonitorInterval: ReturnType<typeof setInterval> | null = null;
 
   // Queuing System
   private queue: Array<{
@@ -54,11 +55,20 @@ export class BrowserManager {
   setState(state: BrowserState): void {
     const prev = this.state;
     this.state = state;
+
+    // Explicit transition logging
+    if (prev === 'ready' && state === 'login-required') {
+      logger.warn('[BrowserManager] Authentication state transition: LOGGED_IN -> LOGGED_OUT.');
+    } else if (prev === 'login-required' && state === 'ready') {
+      logger.info('[BrowserManager] Authentication state transition: LOGGED_OUT -> LOGGED_IN.');
+    }
+
     logger.info(`[BrowserManager] State changed from ${prev} to ${state}`);
 
     if (state === 'ready') {
       this.startRefreshTimer();
       this.stopAuthCheckLoop();
+      this.startAuthMonitorLoop();
       this.telegramAlertSent = false;
       
       // Resolve any waiters blocked on waitForReady()
@@ -71,6 +81,7 @@ export class BrowserManager {
       }
     } else {
       this.stopRefreshTimer();
+      this.stopAuthMonitorLoop();
     }
 
     if (state === 'login-required') {
@@ -114,7 +125,9 @@ export class BrowserManager {
         next.resolve(this.page);
       }
     } else {
-      this.setState('ready');
+      if (this.getState() === 'busy') {
+        this.setState('ready');
+      }
     }
   }
 
@@ -129,7 +142,9 @@ export class BrowserManager {
       this.setState('ready');
     } catch (err) {
       logger.error('[BrowserManager] Initialization failed:', err);
-      this.setState('error');
+      if (this.getState() !== 'login-required') {
+        this.setState('error');
+      }
       throw err;
     }
   }
@@ -338,13 +353,19 @@ export class BrowserManager {
       this.setState('ready');
     } catch (err) {
       logger.error('[BrowserManager] Refresh failed:', err);
+      if (this.getState() === 'login-required') {
+        logger.warn('[BrowserManager] Refresh failed because login is required. Keeping login-required state.');
+        return;
+      }
       try {
         await this.navigateToPayIn();
         this.lastRefreshTime = Date.now();
         this.setState('ready');
       } catch (navErr) {
         logger.error('[BrowserManager] Refresh recovery navigation failed:', navErr);
-        this.setState('error');
+        if (this.getState() !== 'login-required') {
+          this.setState('error');
+        }
       }
     }
   }
@@ -354,6 +375,7 @@ export class BrowserManager {
     logger.info('[BrowserManager] Shutting down...');
     this.stopRefreshTimer();
     this.stopAuthCheckLoop();
+    this.stopAuthMonitorLoop();
     this.refreshPending = false;
     
     // Reject all queued requests
@@ -453,6 +475,37 @@ export class BrowserManager {
     }
   }
 
+  private startAuthMonitorLoop(): void {
+    this.stopAuthMonitorLoop();
+    this.authMonitorInterval = setInterval(async () => {
+      await this.monitorAuthentication();
+    }, 30000); // Check every 30 seconds
+    logger.info('[BrowserManager] Authentication monitor loop started (every 30s).');
+  }
+
+  private stopAuthMonitorLoop(): void {
+    if (this.authMonitorInterval) {
+      clearInterval(this.authMonitorInterval);
+      this.authMonitorInterval = null;
+      logger.info('[BrowserManager] Authentication monitor loop stopped.');
+    }
+  }
+
+  private async monitorAuthentication(): Promise<void> {
+    // Only monitor if we are in 'ready' state to avoid interfering with operations
+    if (this.state !== 'ready') return;
+
+    try {
+      const isAuthenticated = await this.checkAuthentication();
+      if (!isAuthenticated) {
+        logger.warn('[BrowserManager] Authentication loss detected during runtime monitoring!');
+        this.setState('login-required');
+      }
+    } catch (err) {
+      logger.error('[BrowserManager] Error during runtime authentication monitoring:', err);
+    }
+  }
+
   private async handleLoginRequiredState(): Promise<void> {
     this.startAuthCheckLoop();
 
@@ -473,6 +526,7 @@ export class BrowserManager {
       `<b>Timestamp:</b> ${timestamp}\n\n` +
       `<i>Action Required: Please open the warm Chromium browser via Remote Desktop on your VPS and complete manual login.</i>`;
 
+    logger.info('[BrowserManager] Telegram notification triggered: PixPay manual authentication is required.');
     sendTelegramNotification(alertMessage).catch((err) => {
       logger.error('[BrowserManager] Failed to trigger sendTelegramNotification background promise:', err);
     });
