@@ -198,41 +198,31 @@ export class PixPayService {
     logger.info('[PixPayService] Clicking the "Confirm" button...');
     await confirmBtn.click({ force: true });
 
-    // Wait for dialog to close
-    await formDialog.waitFor({ state: 'hidden', timeout: 15000 });
-
-    // --- Step 5: Wait for Pay In table ---
-    const payInTable = page.locator('.el-table, table').first();
-    await payInTable.waitFor({ state: 'visible', timeout: 15000 });
-
-    await Promise.race([
-      page.locator('.el-table__body tbody .el-table__row').first().waitFor({ state: 'visible', timeout: 15000 }).catch(() => {}),
-      page.locator('.el-table__empty-text').first().waitFor({ state: 'visible', timeout: 15000 }).catch(() => {})
-    ]);
-
-    // --- Step 6: Search for the created payment ---
-    logger.info(`[PixPayService] Searching for User ID: ${INPUTS.userId}...`);
-    const searchInput = page.locator('input[placeholder="Please enter User ID"]').first();
-    await searchInput.waitFor({ state: 'visible', timeout: 10000 });
-    await searchInput.fill(INPUTS.userId);
-
-    const searchButton = page.locator('button.el-button--primary:has-text("Search")').first();
-    await searchButton.waitFor({ state: 'visible', timeout: 5000 });
-    await searchButton.click({ force: true });
-    
-    // --- Step 7: Validate and Extract ---
+    // --- Step 5: Locate Created Payment Row & Extract Link ---
+    logger.info(`[PixPayService] Locating payment row for User ID: ${INPUTS.userId}...`);
     const tableRows = page.locator('.el-table__body tbody .el-table__row');
     const targetRow = tableRows.filter({ hasText: INPUTS.userId }).first();
-    await targetRow.waitFor({ state: 'visible', timeout: 5000 }).catch(() => {});
-    
-    const rowCount = await tableRows.count();
-    
-    let matchingRows = await tableRows.filter({ hasText: INPUTS.userId }).all();
-    if (matchingRows.length === 0) {
-      throw new Error(`Row validation failed: Expected matching rows for ${INPUTS.userId} but found none.`);
+
+    // Fast resolution: check if newly inserted row is directly visible in table
+    let isRowFound = await targetRow.waitFor({ state: 'visible', timeout: 2000 }).then(() => true).catch(() => false);
+
+    // Fallback resolution: if table hasn't updated yet, search explicitly by User ID
+    if (!isRowFound) {
+      logger.info(`[PixPayService] Fast row locator pending. Performing explicit search for User ID: ${INPUTS.userId}...`);
+      const searchInput = page.locator('input[placeholder="Please enter User ID"]').first();
+      await searchInput.fill(INPUTS.userId).catch(() => {});
+
+      const searchButton = page.locator('button.el-button--primary:has-text("Search")').first();
+      await searchButton.click({ force: true }).catch(() => {});
+      
+      isRowFound = await targetRow.waitFor({ state: 'visible', timeout: 4000 }).then(() => true).catch(() => false);
     }
 
-    const matchingRow = matchingRows[0];
+    if (!isRowFound) {
+      throw new Error(`Row validation failed: Expected matching row for ${INPUTS.userId} but found none.`);
+    }
+
+    const matchingRow = targetRow;
     const directLinkEl = matchingRow.locator('a[href*="http"], span:has-text("http"), div:has-text("http")').first();
     let extractedLink = '';
     
