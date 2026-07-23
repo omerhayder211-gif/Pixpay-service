@@ -137,38 +137,29 @@ export class PixPayService {
     // --- Step 2a: Select Payment Method (Pay Way) ---
     logger.info(`[PixPayService] Selecting Pay Way radio -> "${pixpayMethod}"...`);
 
-    // Log all available radio options for diagnostics
-    const allRadios = formDialog.locator('label.el-radio');
-    const radioCount = await allRadios.count();
-    const availableOptions: string[] = [];
-    for (let i = 0; i < radioCount; i++) {
-      const text = (await allRadios.nth(i).innerText()).trim();
-      availableOptions.push(text);
-    }
-    logger.info(`[PixPayService] Available Pay Way options (${radioCount}): [${availableOptions.join(' | ')}]`);
-
     // Find and click the target payment method radio
     const payWayRadio = formDialog.locator('label.el-radio').filter({ hasText: pixpayMethod }).first();
     await payWayRadio.waitFor({ state: 'visible', timeout: 5000 });
     await payWayRadio.click({ force: true });
-    await page.waitForTimeout(500);
 
     // Verify the correct radio is now selected (has 'is-checked' class in Element UI)
     const selectedRadio = formDialog.locator('label.el-radio.is-checked');
     const selectedCount = await selectedRadio.count();
     if (selectedCount === 0) {
+      const availableOptions = await formDialog.locator('label.el-radio').allInnerTexts().catch(() => []);
       throw new Error(
         `Payment method selection verification failed: No radio button has "is-checked" class after clicking "${pixpayMethod}". ` +
-        `Available options were: [${availableOptions.join(' | ')}]`
+        `Available options: [${availableOptions.join(' | ')}]`
       );
     }
     const selectedText = (await selectedRadio.first().innerText()).trim();
     logger.info(`[PixPayService] Verification: Currently selected Pay Way radio text = "${selectedText}"`);
 
     if (!selectedText.includes(pixpayMethod)) {
+      const availableOptions = await formDialog.locator('label.el-radio').allInnerTexts().catch(() => []);
       throw new Error(
         `Payment method selection mismatch! Requested="${pixpayMethod}" but selected="${selectedText}". ` +
-        `Aborting payment creation to prevent wrong method. Available options were: [${availableOptions.join(' | ')}]`
+        `Aborting payment creation to prevent wrong method. Available options: [${availableOptions.join(' | ')}]`
       );
     }
     logger.info(`[PixPayService] Pay Way selection CONFIRMED: "${pixpayMethod}" is selected.`);
@@ -224,15 +215,16 @@ export class PixPayService {
     const searchInput = page.locator('input[placeholder="Please enter User ID"]').first();
     await searchInput.waitFor({ state: 'visible', timeout: 10000 });
     await searchInput.fill(INPUTS.userId);
-    await page.waitForTimeout(150);
 
     const searchButton = page.locator('button.el-button--primary:has-text("Search")').first();
     await searchButton.waitFor({ state: 'visible', timeout: 5000 });
     await searchButton.click({ force: true });
-    await page.waitForTimeout(2000);
-
+    
     // --- Step 7: Validate and Extract ---
     const tableRows = page.locator('.el-table__body tbody .el-table__row');
+    const targetRow = tableRows.filter({ hasText: INPUTS.userId }).first();
+    await targetRow.waitFor({ state: 'visible', timeout: 5000 }).catch(() => {});
+    
     const rowCount = await tableRows.count();
     
     let matchingRows = await tableRows.filter({ hasText: INPUTS.userId }).all();
